@@ -332,4 +332,3 @@ elif page == "Gestion des Clients":
         save_data(st.session_state["clients"], CLIENTS_FILE)
         st.success("Client ajouté avec succès !")
 
-
