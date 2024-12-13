@@ -10,11 +10,32 @@ FACTURES_FILE = "factures_data.csv"
 DEVIS_FILE = "devis_data.csv"
 CLIENTS_FILE = "clients_data.csv"
 
+# Fonction pour initialiser un fichier CSV vide avec des colonnes par défaut
+def initialize_csv(file, columns):
+    if not os.path.exists(file):  # Vérifie si le fichier n'existe pas
+        df = pd.DataFrame(columns=columns)
+        df.to_csv(file, index=False)
+
+# Initialisation des fichiers CSV
+initialize_csv(CHANTIERS_FILE, [
+    "Nom du chantier", "Surface (m²)", "Type de travaux", "Matériau",
+    "Quantité nécessaire", "Coût estimé (€)", "Date de début", "Date de fin", "État des travaux", "Équipe assignée"
+])
+initialize_csv(FACTURES_FILE, [
+    "Numéro de facture", "Chantier", "Montant total (€)", "TVA (%)", "Date d'émission", "Date limite de paiement", "Statut de la facture"
+])
+initialize_csv(DEVIS_FILE, [
+    "Numéro de devis", "Client", "Montant total (€)", "Date d'émission", "Date de validité", "Statut du devis"
+])
+initialize_csv(CLIENTS_FILE, [
+    "Nom", "Email", "Téléphone", "Adresse", "Statut"
+])
+
 # Chargement et sauvegarde des données
 def load_data(file, parse_dates=None):
-    if os.path.exists(file):
+    if os.path.exists(file) and os.path.getsize(file) > 0:  # Vérifie que le fichier n'est pas vide
         return pd.read_csv(file, parse_dates=parse_dates).to_dict(orient="records")
-    return []
+    return []  # Retourne une liste vide si le fichier est vide ou absent
 
 def save_data(data, file):
     df = pd.DataFrame(data)
@@ -242,147 +263,73 @@ elif page == "Modifier ou annuler un chantier":
 # --- SECTION 7: Gestion des Factures ---
 elif page == "Gestion des Factures":
     st.title("Gestion des Factures")
-    
-    facture_action = st.radio("Que souhaitez-vous faire ?", ["Ajouter une facture", "Modifier une facture"])
 
-    if facture_action == "Ajouter une facture":
-        # Formulaire d'ajout de facture
-        chantier = st.selectbox("Sélectionnez un chantier", [d["Nom du chantier"] for d in st.session_state["data"]])
-        facture_num = st.text_input("Numéro de facture")
-        montant = st.number_input("Montant total (€)", min_value=0.0, step=0.01)
-        tva = st.number_input("TVA (%)", min_value=0.0, max_value=100.0, step=1.0)
-        date_emission = st.date_input("Date d'émission", min_value=date.today())
-        date_limite = st.date_input("Date limite de paiement", min_value=date_emission)
-        statut = st.selectbox("Statut de la facture", ["Payée", "En attente", "En retard"])
+    chantier = st.selectbox("Sélectionnez un chantier", [d["Nom du chantier"] for d in st.session_state["data"]])
+    facture_num = st.text_input("Numéro de facture")
+    montant = st.number_input("Montant total (€)", min_value=0.0, step=0.01)
+    tva = st.number_input("TVA (%)", min_value=0.0, max_value=100.0, step=1.0)
+    date_emission = st.date_input("Date d'émission", min_value=date.today())
+    date_limite = st.date_input("Date limite de paiement", min_value=date_emission)
+    statut = st.selectbox("Statut de la facture", ["Payée", "En attente", "En retard"])
 
-        if st.button("Ajouter la facture"):
-            facture = {
-                "Numéro de facture": facture_num,
-                "Chantier": chantier,
-                "Montant total (€)": montant,
-                "TVA (%)": tva,
-                "Date d'émission": date_emission,
-                "Date limite de paiement": date_limite,
-                "Statut": statut
-            }
-            st.session_state["factures"].append(facture)
-            save_data(st.session_state["factures"], FACTURES_FILE)
-            st.success("Facture ajoutée avec succès !")
-
-    elif facture_action == "Modifier une facture":
-        # Sélectionner une facture existante à modifier
-        facture = st.selectbox("Sélectionnez une facture", [f["Numéro de facture"] for f in st.session_state["factures"]])
-        
-        # Trouver la facture sélectionnée
-        facture_data = next((f for f in st.session_state["factures"] if f["Numéro de facture"] == facture), None)
-        
-        if facture_data:
-            facture_num = st.text_input("Numéro de facture", value=facture_data["Numéro de facture"])
-            montant = st.number_input("Montant total (€)", value=facture_data["Montant total (€)"], min_value=0.0, step=0.01)
-            tva = st.number_input("TVA (%)", value=facture_data["TVA (%)"], min_value=0.0, max_value=100.0, step=1.0)
-            statut = st.selectbox("Statut de la facture", ["Payée", "En attente", "En retard"], index=["Payée", "En attente", "En retard"].index(facture_data["Statut"]))
-            
-            if st.button("Modifier la facture"):
-                facture_data["Numéro de facture"] = facture_num
-                facture_data["Montant total (€)"] = montant
-                facture_data["TVA (%)"] = tva
-                facture_data["Statut"] = statut
-                save_data(st.session_state["factures"], FACTURES_FILE)
-                st.success("Facture modifiée avec succès !")
+    if st.button("Ajouter la facture"):
+        facture = {
+            "Numéro de facture": facture_num,
+            "Chantier": chantier,
+            "Montant total (€)": montant,
+            "TVA (%)": tva,
+            "Date d'émission": date_emission,
+            "Date limite de paiement": date_limite,
+            "Statut": statut
+        }
+        st.session_state["factures"].append(facture)
+        save_data(st.session_state["factures"], FACTURES_FILE)
+        st.success("Facture ajoutée avec succès !")
 
 # --- SECTION 8: Gestion des Devis ---
 elif page == "Gestion des Devis":
     st.title("Gestion des Devis")
-    
-    devis_action = st.radio("Que souhaitez-vous faire ?", ["Ajouter un devis", "Modifier un devis"])
 
-    if devis_action == "Ajouter un devis":
-        # Formulaire d'ajout de devis
-        client = st.selectbox("Sélectionnez un client", [c["Nom"] for c in st.session_state["clients"]])
-        devis_num = st.text_input("Numéro de devis")
-        montant = st.number_input("Montant total (€)", min_value=0.0, step=0.01)
-        date_emission = st.date_input("Date d'émission", min_value=date.today())
-        validite = st.date_input("Date de validité", min_value=date_emission)
-        statut = st.selectbox("Statut du devis", ["En attente", "Accepté", "Refusé"])
+    client = st.selectbox("Sélectionnez un client", [c["Nom"] for c in st.session_state["clients"]])
+    devis_num = st.text_input("Numéro de devis")
+    montant = st.number_input("Montant total (€)", min_value=0.0, step=0.01)
+    date_emission = st.date_input("Date d'émission", min_value=date.today())
+    validite = st.date_input("Date de validité", min_value=date_emission)
+    statut = st.selectbox("Statut du devis", ["En attente", "Accepté", "Refusé"])
 
-        if st.button("Ajouter le devis"):
-            devis = {
-                "Numéro de devis": devis_num,
-                "Client": client,
-                "Montant total (€)": montant,
-                "Date d'émission": date_emission,
-                "Date de validité": validite,
-                "Statut": statut
-            }
-            st.session_state["devis"].append(devis)
-            save_data(st.session_state["devis"], DEVIS_FILE)
-            st.success("Devis ajouté avec succès !")
-
-    elif devis_action == "Modifier un devis":
-        # Sélectionner un devis existant à modifier
-        devis = st.selectbox("Sélectionnez un devis", [d["Numéro de devis"] for d in st.session_state["devis"]])
-        
-        # Trouver le devis sélectionné
-        devis_data = next((d for d in st.session_state["devis"] if d["Numéro de devis"] == devis), None)
-        
-        if devis_data:
-            devis_num = st.text_input("Numéro de devis", value=devis_data["Numéro de devis"])
-            montant = st.number_input("Montant total (€)", value=devis_data["Montant total (€)"], min_value=0.0, step=0.01)
-            statut = st.selectbox("Statut du devis", ["En attente", "Accepté", "Refusé"], index=["En attente", "Accepté", "Refusé"].index(devis_data["Statut"]))
-            
-            if st.button("Modifier le devis"):
-                devis_data["Numéro de devis"] = devis_num
-                devis_data["Montant total (€)"] = montant
-                devis_data["Statut"] = statut
-                save_data(st.session_state["devis"], DEVIS_FILE)
-                st.success("Devis modifié avec succès !")
+    if st.button("Ajouter le devis"):
+        devis = {
+            "Numéro de devis": devis_num,
+            "Client": client,
+            "Montant total (€)": montant,
+            "Date d'émission": date_emission,
+            "Date de validité": validite,
+            "Statut": statut
+        }
+        st.session_state["devis"].append(devis)
+        save_data(st.session_state["devis"], DEVIS_FILE)
+        st.success("Devis ajouté avec succès !")
 
 # --- SECTION 9: Gestion des Clients ---
 elif page == "Gestion des Clients":
     st.title("Gestion des Clients")
-    
-    client_action = st.radio("Que souhaitez-vous faire ?", ["Ajouter un client", "Modifier un client"])
 
-    if client_action == "Ajouter un client":
-        # Formulaire d'ajout de client
-        nom_client = st.text_input("Nom du client")
-        email = st.text_input("Email")
-        telephone = st.text_input("Téléphone")
-        adresse = st.text_area("Adresse")
-        statut = st.selectbox("Statut du client", ["Actif", "Potentiel", "Inactif"])
+    nom_client = st.text_input("Nom du client")
+    email = st.text_input("Email")
+    telephone = st.text_input("Téléphone")
+    adresse = st.text_area("Adresse")
+    statut = st.selectbox("Statut du client", ["Actif", "Potentiel", "Inactif"])
 
-        if st.button("Ajouter le client"):
-            client = {
-                "Nom": nom_client,
-                "Email": email,
-                "Téléphone": telephone,
-                "Adresse": adresse,
-                "Statut": statut
-            }
-            st.session_state["clients"].append(client)
-            save_data(st.session_state["clients"], CLIENTS_FILE)
-            st.success("Client ajouté avec succès !")
+    if st.button("Ajouter le client"):
+        client = {
+            "Nom": nom_client,
+            "Email": email,
+            "Téléphone": telephone,
+            "Adresse": adresse,
+            "Statut": statut
+        }
+        st.session_state["clients"].append(client)
+        save_data(st.session_state["clients"], CLIENTS_FILE)
+        st.success("Client ajouté avec succès !")
 
-    elif client_action == "Modifier un client":
-        # Sélectionner un client existant à modifier
-        client = st.selectbox("Sélectionnez un client", [c["Nom"] for c in st.session_state["clients"]])
-        
-        # Trouver le client sélectionné
-        client_data = next((c for c in st.session_state["clients"] if c["Nom"] == client), None)
-        
-        if client_data:
-            nom_client = st.text_input("Nom du client", value=client_data["Nom"])
-            email = st.text_input("Email", value=client_data["Email"])
-            telephone = st.text_input("Téléphone", value=client_data["Téléphone"])
-            adresse = st.text_area("Adresse", value=client_data["Adresse"])
-            statut = st.selectbox("Statut du client", ["Actif", "Potentiel", "Inactif"], index=["Actif", "Potentiel", "Inactif"].index(client_data["Statut"]))
-            
-            if st.button("Modifier le client"):
-                client_data["Nom"] = nom_client
-                client_data["Email"] = email
-                client_data["Téléphone"] = telephone
-                client_data["Adresse"] = adresse
-                client_data["Statut"] = statut
-                save_data(st.session_state["clients"], CLIENTS_FILE)
-                st.success("Client modifié avec succès !")
 
