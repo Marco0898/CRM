@@ -12,9 +12,28 @@ CLIENTS_FILE = "clients_data.csv"
 
 # Fonction pour initialiser un fichier CSV vide avec des colonnes par défaut
 def initialize_csv(file, columns):
-    if not os.path.exists(file):  # Vérifie si le fichier n'existe pas
+    if not os.path.exists(file) or os.path.getsize(file) == 0:  # Si le fichier n'existe pas ou est vide
         df = pd.DataFrame(columns=columns)
         df.to_csv(file, index=False)
+
+# Chargement des données avec vérification des fichiers vides ou manquants
+def load_data(file, parse_dates=None, columns=None):
+    """
+    Charge les données d'un fichier CSV. Si le fichier est vide ou absent,
+    il est initialisé avec des colonnes par défaut.
+    """
+    if not os.path.exists(file) or os.path.getsize(file) == 0:  # Fichier absent ou vide
+        if columns:  # Créer un fichier avec des colonnes par défaut
+            df = pd.DataFrame(columns=columns)
+            df.to_csv(file, index=False)
+        return []  # Retourne une liste vide si le fichier est vide ou absent
+    try:
+        return pd.read_csv(file, parse_dates=parse_dates).to_dict(orient="records")
+    except pd.errors.EmptyDataError:
+        if columns:  # Réinitialise si le fichier est vide malgré tout
+            df = pd.DataFrame(columns=columns)
+            df.to_csv(file, index=False)
+        return []
 
 # Initialisation des fichiers CSV
 initialize_csv(CHANTIERS_FILE, [
@@ -31,28 +50,27 @@ initialize_csv(CLIENTS_FILE, [
     "Nom", "Email", "Téléphone", "Adresse", "Statut"
 ])
 
-# Chargement et sauvegarde des données
-def load_data(file, parse_dates=None):
-    if os.path.exists(file) and os.path.getsize(file) > 0:  # Vérifie que le fichier n'est pas vide
-        return pd.read_csv(file, parse_dates=parse_dates).to_dict(orient="records")
-    return []  # Retourne une liste vide si le fichier est vide ou absent
-
-def save_data(data, file):
-    df = pd.DataFrame(data)
-    df.to_csv(file, index=False)
-
-# Initialisation des données dans st.session_state
+# Chargement des données dans st.session_state
 if "data" not in st.session_state:
-    st.session_state["data"] = load_data(CHANTIERS_FILE, parse_dates=["Date de début", "Date de fin"])
+    st.session_state["data"] = load_data(CHANTIERS_FILE, parse_dates=["Date de début", "Date de fin"], columns=[
+        "Nom du chantier", "Surface (m²)", "Type de travaux", "Matériau",
+        "Quantité nécessaire", "Coût estimé (€)", "Date de début", "Date de fin", "État des travaux", "Équipe assignée"
+    ])
 
 if "factures" not in st.session_state:
-    st.session_state["factures"] = load_data(FACTURES_FILE)
+    st.session_state["factures"] = load_data(FACTURES_FILE, columns=[
+        "Numéro de facture", "Chantier", "Montant total (€)", "TVA (%)", "Date d'émission", "Date limite de paiement", "Statut de la facture"
+    ])
 
 if "devis" not in st.session_state:
-    st.session_state["devis"] = load_data(DEVIS_FILE)
+    st.session_state["devis"] = load_data(DEVIS_FILE, columns=[
+        "Numéro de devis", "Client", "Montant total (€)", "Date d'émission", "Date de validité", "Statut du devis"
+    ])
 
 if "clients" not in st.session_state:
-    st.session_state["clients"] = load_data(CLIENTS_FILE)
+    st.session_state["clients"] = load_data(CLIENTS_FILE, columns=[
+        "Nom", "Email", "Téléphone", "Adresse", "Statut"
+    ])
 
 if "equipes" not in st.session_state:
     st.session_state["equipes"] = [
