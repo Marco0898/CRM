@@ -2,406 +2,417 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import os
-from datetime import date
+import urllib.parse
+from datetime import date, datetime, timedelta
 
-# --- Chemins des fichiers pour la persistance des données ---
-CHANTIERS_FILE = "chantiers_data.csv"
-FACTURES_FILE = "factures_data.csv"
-DEVIS_FILE = "devis_data.csv"
-CLIENTS_FILE = "clients_data.csv"
+# --- 1. CONFIGURATION INITIALE ---
+st.set_page_config(page_title="EGY RENOVATION - Master", layout="wide", page_icon="🏗️")
 
-# --- Fonction pour initialiser un fichier CSV vide avec des colonnes par défaut ---
-def initialize_csv(file, columns):
-    if not os.path.exists(file) or os.path.getsize(file) == 0:
-        df = pd.DataFrame(columns=columns)
-        df.to_csv(file, index=False)
+# --- 2. GESTION DES DOSSIERS & FICHIERS ---
+DATA_DIR = "data"
+DOCS_DIR = os.path.join(DATA_DIR, "bordereaux")
 
-# --- Chargement des données avec vérification des fichiers vides ou manquants ---
-def load_data(file, parse_dates=None, columns=None):
-    if not os.path.exists(file) or os.path.getsize(file) == 0:
-        if columns:
-            df = pd.DataFrame(columns=columns)
-            df.to_csv(file, index=False)
-        return []
-    try:
-        return pd.read_csv(file, parse_dates=parse_dates).to_dict(orient="records")
-    except pd.errors.EmptyDataError:
-        if columns:
-            df = pd.DataFrame(columns=columns)
-            df.to_csv(file, index=False)
-        return []
+# Création des dossiers si inexistants
+for d in [DATA_DIR, DOCS_DIR]:
+    if not os.path.exists(d):
+        os.makedirs(d)
 
-# --- Initialisation des fichiers CSV ---
-initialize_csv(CHANTIERS_FILE, [
-    "Nom du chantier", "Surface (m²)", "Type de travaux", "Matériau",
-    "Quantité nécessaire", "Coût estimé (€)", "Date de début", "Date de fin",
-    "État des travaux", "Équipe assignée"
-])
-initialize_csv(FACTURES_FILE, [
-    "Numéro de facture", "Chantier", "Montant total (€)", "TVA (%)",
-    "Date d'émission", "Date limite de paiement", "Statut de la facture"
-])
-initialize_csv(DEVIS_FILE, [
-    "Numéro de devis", "Client", "Montant total (€)", "Date d'émission",
-    "Date de validité", "Statut du devis"
-])
-initialize_csv(CLIENTS_FILE, [
-    "Nom", "Email", "Téléphone", "Adresse", "Statut"
-])
-
-# --- Chargement des données dans st.session_state ---
-if "data" not in st.session_state:
-    st.session_state["data"] = load_data(
-        CHANTIERS_FILE, parse_dates=["Date de début", "Date de fin"],
-        columns=["Nom du chantier", "Surface (m²)", "Type de travaux", "Matériau",
-                 "Quantité nécessaire", "Coût estimé (€)", "Date de début", "Date de fin",
-                 "État des travaux", "Équipe assignée"]
-    )
-
-if "factures" not in st.session_state:
-    st.session_state["factures"] = load_data(FACTURES_FILE, columns=[
-        "Numéro de facture", "Chantier", "Montant total (€)", "TVA (%)",
-        "Date d'émission", "Date limite de paiement", "Statut de la facture"
-    ])
-
-if "devis" not in st.session_state:
-    st.session_state["devis"] = load_data(DEVIS_FILE, columns=[
-        "Numéro de devis", "Client", "Montant total (€)", "Date d'émission",
-        "Date de validité", "Statut du devis"
-    ])
-
-if "clients" not in st.session_state:
-    st.session_state["clients"] = load_data(CLIENTS_FILE, columns=[
-        "Nom", "Email", "Téléphone", "Adresse", "Statut"
-    ])
-
-if "equipes" not in st.session_state:
-    st.session_state["equipes"] = [
-        "Équipe Issam", "Équipe MG", "Équipe TAM", "Équipe Momo DZ",
-        "Équipe Hamada", "Équipe AR", "Équipe Diaa", "Équipe M.abdo",
-        "Équipe Mansour", "Équipe M.hassan"
-    ]
-
-# --- Tarifs professionnels pour les matériaux ---
-tarifs_materiaux = {
-    "Peinture Glycéro": 20.0,
-    "Peinture Acrylique": 15.0,
-    "Peinture Satinée": 18.0,
-    "Peinture Mate": 16.0,
-    "Peinture spéciale pièces humides": 22.0,
-    "Enduit de rebouchage": 5.0,
-    "Enduit de lissage": 6.0,
-    "Enduit de dégrossissage": 4.0,
-    "Enduit gouttelettes": 7.0,
-    "Revêtement mural standard": 10.0,
-    "Revêtement mural premium": 15.0,
-    "Revêtement de sol": 25.0,
+# Chemins des fichiers (On garde les mêmes noms pour ne pas perdre vos données si elles existent)
+FILES = {
+    "chantiers": os.path.join(DATA_DIR, "chantiers_master.csv"),
+    "clients": os.path.join(DATA_DIR, "clients_master.csv"),
+    "stocks": os.path.join(DATA_DIR, "stocks_master.csv"),
+    "mouvements": os.path.join(DATA_DIR, "mouvements_master.csv"),
+    "materiaux": os.path.join(DATA_DIR, "materiaux_chantier_master.csv")
 }
 
-# --- SECTION 1: Navigation par onglets ---
-st.sidebar.title("Navigation")
-page = st.sidebar.radio(
-    "Choisissez une section",
-    ["Tableau de bord", "Suivi de chantier", "Planning des équipes",
-     "Calendrier interactif", "Modifier ou annuler un chantier",
-     "Gestion des Factures", "Gestion des Devis", "Gestion des Clients"]
-)
+# --- 3. DÉFINITION DES DONNÉES & STRUCTURES ---
+LOTS_OPTIONS = [
+    "🧱 Maçonnerie / Démolition", "🏗️ Plâtrerie / Isolation", "🎨 Peinture (Murs/Plafonds)",
+    "🪵 Menuiserie Intérieure", "🪟 Menuiserie Extérieure", "🚿 Sols Durs (Carrelage/Faïence)",
+    "🧶 Sols Souples (PVC/Moquette)", "🌳 Parquet (Flottant/Collé)", "🏠 Façade",
+    "⚡ Électricité", "💧 Plomberie", "🧹 Nettoyage"
+]
 
-# --- SECTION 2: Tableau de bord ---
-if page == "Tableau de bord":
-    st.title("Tableau de bord")
-    total_chantiers = len(st.session_state["data"])
-    consommation_totale = sum([d["Quantité nécessaire"] for d in st.session_state["data"] if "Quantité nécessaire" in d])
-    cout_total = sum([d["Coût estimé (€)"] for d in st.session_state["data"] if "Coût estimé (€)" in d])
-    chantiers_termines = sum(1 for d in st.session_state["data"] if d.get("État des travaux") == "Terminé")
-    total_factures = len(st.session_state["factures"])
-    total_devis = len(st.session_state["devis"])
-    total_clients = len(st.session_state["clients"])
-    total_revenu = sum([f["Montant total (€)"] for f in st.session_state["factures"]])
-    devis_acceptes = sum(1 for d in st.session_state["devis"] if d["Statut"] == "Accepté")
-    devis_refuses = sum(1 for d in st.session_state["devis"] if d["Statut"] == "Refusé")
+EQUIPES = ["Non assigné", "Équipe Issam", "Équipe MG", "Équipe TAM", "Équipe Momo DZ", 
+           "Équipe Hamada", "Équipe AR", "Équipe Diaa", "Équipe M.abdo", 
+           "Équipe Mansour", "Équipe M.hassan"]
 
-    st.header("Statistiques générales")
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Total chantiers", total_chantiers)
-    col2.metric("Total factures", total_factures)
-    col3.metric("Total devis", total_devis)
-    col4.metric("Total clients", total_clients)
+CATEGORIES_STOCK = ["Peinture", "Plâtrerie", "Isolation", "Sol/Carrelage", "Sol/Parquet", "Façade", "Consommable", "Outillage", "Électricité", "Plomberie"]
 
-    st.header("Finances")
-    col5, col6, col7 = st.columns(3)
-    col5.metric("Revenus totaux (€)", f"{total_revenu:.2f}")
-    col6.metric("Devis acceptés", devis_acceptes)
-    col7.metric("Devis refusés", devis_refuses)
+# Stock de démarrage (Uniquement si fichier vide)
+INITIAL_STOCK = [
+    {"Référence": "PEINT-MAT-B", "Libellé": "Peinture Mate Blanche", "Quantité": 20, "Unité": "Pot 15L", "Catégorie": "Peinture", "Prix Achat": 75.0, "Seuil Alerte": 5},
+    {"Référence": "PEINT-VEL-B", "Libellé": "Peinture Velours Blanche", "Quantité": 25, "Unité": "Pot 15L", "Catégorie": "Peinture", "Prix Achat": 85.0, "Seuil Alerte": 5},
+    {"Référence": "PLACO-STD", "Libellé": "Plaque BA13 Standard", "Quantité": 50, "Unité": "Plaque", "Catégorie": "Plâtrerie", "Prix Achat": 9.00, "Seuil Alerte": 10},
+    {"Référence": "RAIL-48", "Libellé": "Rail R48 (3m)", "Quantité": 100, "Unité": "Unité", "Catégorie": "Plâtrerie", "Prix Achat": 2.50, "Seuil Alerte": 20},
+    {"Référence": "CARR-GRES", "Libellé": "Carrelage Grès Cérame 60x60", "Quantité": 40, "Unité": "m²", "Catégorie": "Sol/Carrelage", "Prix Achat": 28.00, "Seuil Alerte": 5},
+]
 
-    if st.session_state["data"]:
-        st.header("Répartition des travaux par type")
-        df = pd.DataFrame(st.session_state["data"])
-        fig = px.pie(df, names="Type de travaux", title="Répartition des travaux")
-        st.plotly_chart(fig)
+# --- 4. FONCTIONS UTILITAIRES ---
+def safe_float(val):
+    """Convertit en float de manière sécurisée."""
+    try:
+        if pd.isna(val) or str(val).strip() == "": return 0.0
+        return float(str(val).replace(",", ".").replace("€", "").replace(" ", "").strip())
+    except:
+        return 0.0
 
-    if st.session_state["factures"]:
-        st.header("Revenus par chantier")
-        df_factures = pd.DataFrame(st.session_state["factures"])
-        fig_factures = px.bar(df_factures, x="Chantier", y="Montant total (€)", title="Revenus par chantier")
-        st.plotly_chart(fig_factures)
+def load_data(key, parse_dates=None):
+    """Charge les données et force la création si vide."""
+    path = FILES[key]
+    try:
+        if not os.path.exists(path) or os.path.getsize(path) == 0:
+            # Si vide, on initialise
+            if key == "stocks":
+                df = pd.DataFrame(INITIAL_STOCK)
+            else:
+                df = pd.DataFrame() # Vide pour les autres
+            df.to_csv(path, index=False)
+            return df.to_dict(orient="records")
+        
+        df = pd.read_csv(path, parse_dates=parse_dates)
+        df = df.fillna("")
+        return df.to_dict(orient="records")
+    except Exception as e:
+        st.error(f"Erreur lecture fichier {key}: {e}")
+        return []
 
-# --- SECTION 3: Suivi de chantier ---
-elif page == "Suivi de chantier":
-    st.title("Suivi de chantier")
-    nom_chantier = st.text_input("Nom du chantier")
-    surface = st.number_input("Surface à couvrir (en m²)", min_value=1, step=1)
-    type_travail = st.selectbox("Type de travaux", ["Peinture", "Enduit", "Revêtement mural", "Revêtement de sol"])
-    materiau = None
-    prix_unitaire = 0
-
-    if type_travail == "Peinture":
-        materiau = st.selectbox(
-            "Type de peinture",
-            ["Peinture Glycéro", "Peinture Acrylique", "Peinture Satinée", "Peinture Mate", "Peinture spéciale pièces humides"]
-        )
-        couches = st.number_input("Nombre de couches", min_value=1, max_value=5, step=1, value=2)
-        prix_unitaire = tarifs_materiaux[materiau]
-    elif type_travail == "Enduit":
-        materiau = st.selectbox(
-            "Type d'enduit",
-            ["Enduit de rebouchage", "Enduit de lissage", "Enduit de dégrossissage", "Enduit gouttelettes"]
-        )
-        prix_unitaire = tarifs_materiaux[materiau]
-    elif type_travail == "Revêtement mural":
-        materiau = st.selectbox(
-            "Type de revêtement mural",
-            ["Revêtement mural standard", "Revêtement mural premium"]
-        )
-        prix_unitaire = tarifs_materiaux[materiau]
-    elif type_travail == "Revêtement de sol":
-        materiau = "Revêtement de sol"
-        prix_unitaire = tarifs_materiaux[materiau]
-
-    date_debut = st.date_input("Date de début des travaux", min_value=date.today())
-    date_fin = st.date_input("Date de fin des travaux", min_value=date_debut)
-    etat = st.selectbox("État des travaux", ["Non commencé", "En cours", "Terminé"])
-    nb_personnes = st.number_input("Nombre de personnes affectées", min_value=1, max_value=20, step=1, value=3)
-
-    if st.button("Calculer"):
-        if type_travail == "Peinture":
-            consommation = surface * 0.15 * couches
-        else:
-            consommation = surface
-        cout = consommation * prix_unitaire
-
-        st.session_state["consommation"] = consommation
-        st.session_state["cout"] = cout
-
-        st.write(f"Matériau choisi : **{materiau}**")
-        st.write(f"Quantité nécessaire : **{consommation:.2f} unités**")
-        st.write(f"Coût estimé : **{cout:.2f} €**")
-
-    if st.button("Ajouter au tableau"):
-        if st.session_state.get("consommation") is not None:
-            st.session_state["data"].append({
-                "Nom du chantier": nom_chantier,
-                "Surface (m²)": surface,
-                "Type de travaux": type_travail,
-                "Matériau": materiau,
-                "Quantité nécessaire": st.session_state["consommation"],
-                "Coût estimé (€)": st.session_state["cout"],
-                "Date de début": date_debut,
-                "Date de fin": date_fin,
-                "Nombre de personnes": nb_personnes,
-                "État des travaux": etat,
-                "Équipe assignée": None
-            })
-            save_data(st.session_state["data"], CHANTIERS_FILE)
-            st.success("Tâche ajoutée avec succès !")
-            st.session_state["consommation"] = None
-            st.session_state["cout"] = None
-        else:
-            st.warning("Veuillez d'abord calculer les estimations.")
-
-# --- SECTION 4: Planning des équipes ---
-elif page == "Planning des équipes":
-    st.title("Planning des équipes")
-
-    chantier = st.selectbox("Choisir un chantier", [d["Nom du chantier"] for d in st.session_state["data"]])
-    equipe = st.selectbox("Choisir une équipe", st.session_state["equipes"])
-
-    if st.button("Assigner l'équipe"):
-        for d in st.session_state["data"]:
-            if d["Nom du chantier"] == chantier:
-                d["Équipe assignée"] = equipe
-                save_data(st.session_state["data"], CHANTIERS_FILE)
-                st.success(f"L'équipe {equipe} a été assignée au chantier {chantier}.")
-
-# --- SECTION 5: Calendrier interactif ---
-elif page == "Calendrier interactif":
-    st.title("Calendrier interactif")
-
-    if st.session_state["data"]:
-        df_calendar = pd.DataFrame(st.session_state["data"])
-        df_calendar["Date de début"] = pd.to_datetime(df_calendar["Date de début"])
-        df_calendar["Date de fin"] = pd.to_datetime(df_calendar["Date de fin"])
-        fig_calendar = px.timeline(
-            df_calendar,
-            x_start="Date de début",
-            x_end="Date de fin",
-            y="Nom du chantier",
-            color="Équipe assignée",
-            title="Calendrier des chantiers"
-        )
-        st.plotly_chart(fig_calendar)
+def save_data(key, data):
+    """Sauvegarde les données dans le CSV."""
+    if isinstance(data, list):
+        df = pd.DataFrame(data)
     else:
-        st.write("Aucune donnée disponible pour le calendrier.")
+        df = data
+    df.to_csv(FILES[key], index=False)
 
-# --- SECTION 6: Modifier ou annuler un chantier ---
-elif page == "Modifier ou annuler un chantier":
-    st.title("Modifier ou annuler un chantier")
+# --- 5. INITIALISATION SESSION STATE ---
+if "data_loaded" not in st.session_state:
+    st.session_state["chantiers"] = load_data("chantiers", parse_dates=["Date Début", "Date Fin"])
+    st.session_state["clients"] = load_data("clients")
+    st.session_state["stocks"] = load_data("stocks")
+    st.session_state["mouvements"] = load_data("mouvements")
+    st.session_state["materiaux"] = load_data("materiaux")
+    st.session_state["data_loaded"] = True
 
-    chantier = st.selectbox("Sélectionner un chantier", [d["Nom du chantier"] for d in st.session_state["data"]])
+# --- 6. NAVIGATION ---
+st.sidebar.title("🏗️ EGY RENOVATION")
+page = st.sidebar.radio("Menu Principal", [
+    "📊 Tableau de Bord", 
+    "🚧 Gestion Chantiers", 
+    "🛒 Fournitures & Commandes", 
+    "📦 Stock Dépôt", 
+    "👥 Clients"
+])
 
-    if chantier:
-        chantier_data = next((d for d in st.session_state["data"] if d["Nom du chantier"] == chantier), None)
+# =========================================================
+# PAGE 1 : TABLEAU DE BORD
+# =========================================================
+if page == "📊 Tableau de Bord":
+    st.title("📊 Vue d'ensemble")
+    
+    df_c = pd.DataFrame(st.session_state["chantiers"])
+    nb_encours = len(df_c[df_c["État"] == "En cours"]) if not df_c.empty and "État" in df_c.columns else 0
+    
+    df_s = pd.DataFrame(st.session_state["stocks"])
+    val_stock = 0.0
+    if not df_s.empty:
+        # Calcul sécurisé
+        val_stock = sum(df_s.apply(lambda x: safe_float(x.get("Quantité")) * safe_float(x.get("Prix Achat")), axis=1))
 
-        if chantier_data:
-            new_date_debut = st.date_input("Nouvelle date de début", chantier_data["Date de début"])
-            new_date_fin = st.date_input("Nouvelle date de fin", chantier_data["Date de fin"])
-            new_equipe = st.selectbox("Nouvelle équipe assignée", st.session_state["equipes"], index=st.session_state["equipes"].index(chantier_data.get("Équipe assignée", "")))
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Chantiers En cours", nb_encours)
+    col2.metric("Valeur Stock", f"{val_stock:,.2f} €")
+    col3.metric("Clients", len(st.session_state["clients"]))
+    
+    st.divider()
+    
+    if not df_c.empty and "Date Début" in df_c.columns:
+        st.subheader("📅 Planning Global")
+        plot_df = df_c.copy()
+        # Conversion forcée des dates
+        plot_df["Date Début"] = pd.to_datetime(plot_df["Date Début"], errors='coerce')
+        plot_df["Date Fin"] = pd.to_datetime(plot_df["Date Fin"], errors='coerce')
+        plot_df = plot_df.dropna(subset=["Date Début", "Date Fin"])
+        
+        if not plot_df.empty:
+            fig = px.timeline(plot_df, x_start="Date Début", x_end="Date Fin", y="Nom du chantier", color="Équipe")
+            fig.update_yaxes(autorange="reversed")
+            st.plotly_chart(fig, use_container_width=True)
 
-            if st.button("Modifier le chantier"):
-                chantier_data["Date de début"] = new_date_debut
-                chantier_data["Date de fin"] = new_date_fin
-                chantier_data["Équipe assignée"] = new_equipe
-                save_data(st.session_state["data"], CHANTIERS_FILE)
-                st.success(f"Le chantier {chantier} a été mis à jour.")
-
-            if st.button("Annuler le chantier"):
-                st.session_state["data"].remove(chantier_data)
-                save_data(st.session_state["data"], CHANTIERS_FILE)
-                st.success(f"Le chantier {chantier} a été annulé.")
-
-# --- SECTION 7: Gestion des Factures ---
-elif page == "Gestion des Factures":
-    st.title("Gestion des Factures")
-
-    chantier = st.selectbox("Sélectionnez un chantier", [d["Nom du chantier"] for d in st.session_state["data"]])
-    facture_num = st.text_input("Numéro de facture")
-    montant = st.number_input("Montant total (€)", min_value=0.0, step=0.01)
-    tva = st.number_input("TVA (%)", min_value=0.0, max_value=100.0, step=1.0)
-    date_emission = st.date_input("Date d'émission", min_value=date.today())
-    date_limite = st.date_input("Date limite de paiement", min_value=date_emission)
-    statut = st.selectbox("Statut de la facture", ["Payée", "En attente", "En retard"])
-
-    if st.button("Ajouter la facture"):
-        facture = {
-            "Numéro de facture": facture_num,
-            "Chantier": chantier,
-            "Montant total (€)": montant,
-            "TVA (%)": tva,
-            "Date d'émission": date_emission,
-            "Date limite de paiement": date_limite,
-            "Statut":statut
-        }
-        st.session_state["factures"].append(facture)
-        save_data(st.session_state["factures"], FACTURES_FILE)
-        st.success("Facture ajoutée avec succès !")
-
-    # Modifier une facture existante
-    if st.session_state["factures"]:
-        st.header("Modifier une facture existante")
-        facture_a_modifier = st.selectbox(
-            "Sélectionnez une facture à modifier",
-            [f["Numéro de facture"] for f in st.session_state["factures"]]
+# =========================================================
+# PAGE 2 : GESTION CHANTIERS
+# =========================================================
+elif page == "🚧 Gestion Chantiers":
+    st.title("🚧 Suivi des Chantiers")
+    
+    tab1, tab2, tab3 = st.tabs(["📋 Liste & Planning", "🛠️ Fiche Technique", "➕ Nouveau Chantier"])
+    
+    # --- LISTE ÉDITABLE ---
+    with tab1:
+        st.info("💡 Modifiez directement dans le tableau (Double-clic). Cochez et appuyez sur 'Suppr' pour effacer une ligne.")
+        
+        df_chantiers = pd.DataFrame(st.session_state["chantiers"])
+        
+        # Configuration éditeur
+        edited_chantiers = st.data_editor(
+            df_chantiers,
+            num_rows="dynamic",
+            use_container_width=True,
+            key="editor_chantiers",
+            column_config={
+                "État": st.column_config.SelectboxColumn(options=["Devis", "En cours", "Terminé", "Annulé"]),
+                "Équipe": st.column_config.SelectboxColumn(options=EQUIPES),
+                "Date Début": st.column_config.DateColumn(format="DD/MM/YYYY"),
+                "Date Fin": st.column_config.DateColumn(format="DD/MM/YYYY"),
+                "Prix Devis TTC": st.column_config.NumberColumn(format="%.2f €"),
+            }
         )
-        if facture_a_modifier:
-            facture_data = next((f for f in st.session_state["factures"] if f["Numéro de facture"] == facture_a_modifier), None)
-            if facture_data:
-                new_montant = st.number_input("Nouveau montant (€)", value=facture_data["Montant total (€)"], min_value=0.0, step=0.01)
-                new_statut = st.selectbox("Nouveau statut", ["Payée", "En attente", "En retard"], index=["Payée", "En attente", "En retard"].index(facture_data["Statut"]))
-                if st.button("Enregistrer les modifications"):
-                    facture_data["Montant total (€)"] = new_montant
-                    facture_data["Statut"] = new_statut
-                    save_data(st.session_state["factures"], FACTURES_FILE)
-                    st.success("Facture modifiée avec succès !")
+        
+        if st.button("💾 Enregistrer modifications Chantiers", type="primary"):
+            st.session_state["chantiers"] = edited_chantiers.to_dict(orient="records")
+            save_data("chantiers", st.session_state["chantiers"])
+            st.success("Mise à jour réussie !")
+            st.rerun()
 
-# --- SECTION 8: Gestion des Devis ---
-elif page == "Gestion des Devis":
-    st.title("Gestion des Devis")
+    # --- FICHE TECHNIQUE ---
+    with tab2:
+        # Sélecteur robuste
+        opts_c = {c.get("Nom du chantier", "Inconnu"): c for c in st.session_state["chantiers"]}
+        sel_c = st.selectbox("Sélectionner un chantier :", list(opts_c.keys()))
+        
+        if sel_c:
+            chantier = opts_c[sel_c]
+            idx = st.session_state["chantiers"].index(chantier)
+            
+            st.write(f"**Client :** {chantier.get('Client', '')} | **Budget :** {chantier.get('Prix Devis TTC', 0)}€")
+            
+            with st.form("tech_details"):
+                # Gestion des lots
+                lots_str = str(chantier.get("Lots", ""))
+                current_lots = [l.strip() for l in lots_str.split(",") if l.strip() in LOTS_OPTIONS]
+                new_lots = st.multiselect("Corps d'états concernés :", LOTS_OPTIONS, default=current_lots)
+                
+                comments = st.text_area("Notes Techniques / Accès", value=str(chantier.get("Commentaires Techniques", "")))
+                
+                if st.form_submit_button("Mettre à jour Fiche"):
+                    st.session_state["chantiers"][idx]["Lots"] = ", ".join(new_lots)
+                    st.session_state["chantiers"][idx]["Commentaires Techniques"] = comments
+                    save_data("chantiers", st.session_state["chantiers"])
+                    st.success("Enregistré !")
 
-    client = st.selectbox("Sélectionnez un client", [c["Nom"] for c in st.session_state["clients"]])
-    devis_num = st.text_input("Numéro de devis")
-    montant = st.number_input("Montant total (€)", min_value=0.0, step=0.01)
-    date_emission = st.date_input("Date d'émission", min_value=date.today())
-    validite = st.date_input("Date de validité", min_value=date_emission)
-    statut = st.selectbox("Statut du devis", ["En attente", "Accepté", "Refusé"])
+    # --- NOUVEAU CHANTIER ---
+    with tab3:
+        with st.form("new_ch"):
+            c1, c2 = st.columns(2)
+            n_nom = c1.text_input("Nom Chantier")
+            n_cli = c2.text_input("Nom Client") # Texte libre plus simple
+            
+            c3, c4 = st.columns(2)
+            n_deb = c3.date_input("Début", date.today())
+            n_fin = c4.date_input("Fin", date.today() + timedelta(days=7))
+            n_prix = st.number_input("Devis TTC (€)", 0.0)
+            
+            if st.form_submit_button("Créer Chantier"):
+                new_id = f"C{len(st.session_state['chantiers'])+100}"
+                entry = {
+                    "ID": new_id, "Nom du chantier": n_nom, "Client": n_cli,
+                    "Date Début": n_deb, "Date Fin": n_fin, "Prix Devis TTC": n_prix,
+                    "État": "Devis", "Équipe": "Non assigné"
+                }
+                st.session_state["chantiers"].append(entry)
+                save_data("chantiers", st.session_state["chantiers"])
+                st.success("Chantier créé !")
+                st.rerun()
 
-    if st.button("Ajouter le devis"):
-        devis = {
-            "Numéro de devis": devis_num,
-            "Client": client,
-            "Montant total (€)": montant,
-            "Date d'émission": date_emission,
-            "Date de validité": validite,
-            "Statut": statut
-        }
-        st.session_state["devis"].append(devis)
-        save_data(st.session_state["devis"], DEVIS_FILE)
-        st.success("Devis ajouté avec succès !")
+# =========================================================
+# PAGE 3 : FOURNITURES
+# =========================================================
+elif page == "🛒 Fournitures & Commandes":
+    st.title("🛒 Matériaux par Chantier")
+    
+    # 1. Sélection Chantier
+    active_chantiers = [c for c in st.session_state["chantiers"] if c.get("État") != "Terminé"]
+    choices = {c.get("Nom du chantier"): c for c in active_chantiers}
+    
+    sel_name = st.selectbox("Choisir le chantier :", list(choices.keys()))
+    
+    if sel_name:
+        chantier_obj = choices[sel_name]
+        
+        c_add, c_list = st.columns([1, 2])
+        
+        # --- FORMULAIRE D'AJOUT ---
+        with c_add:
+            st.markdown("### Ajouter Produit")
+            source = st.radio("Source :", ["📦 Stock Dépôt", "🚛 Commande Fournisseur"])
+            
+            with st.form("add_mat_form"):
+                if source == "📦 Stock Dépôt":
+                    # Création liste déroulante sécurisée
+                    stock_list = st.session_state["stocks"]
+                    # On filtre pour afficher label propre
+                    stock_options = {f"{s.get('Libellé', 'Inc')} ({s.get('Unité', 'u')}) - Reste: {s.get('Quantité', 0)}": s for s in stock_list}
+                    
+                    p_sel_key = st.selectbox("Produit en stock", list(stock_options.keys())) if stock_options else None
+                    q_val = st.number_input("Quantité", min_value=1.0)
+                    
+                    if st.form_submit_button("Sortir du Stock"):
+                        if p_sel_key:
+                            prod_data = stock_options[p_sel_key]
+                            # Logique Stock
+                            q_dispo = safe_float(prod_data.get("Quantité"))
+                            q_sortie = min(q_dispo, q_val)
+                            
+                            # Mise à jour Stock global
+                            idx = stock_list.index(prod_data)
+                            st.session_state["stocks"][idx]["Quantité"] = q_dispo - q_sortie
+                            save_data("stocks", st.session_state["stocks"])
+                            
+                            # Ajout Liste Chantier
+                            st.session_state["materiaux"].append({
+                                "ID Chantier": chantier_obj.get("ID"),
+                                "Nom Chantier": sel_name,
+                                "Référence": prod_data.get("Référence"),
+                                "Désignation": prod_data.get("Libellé"),
+                                "Quantité": q_sortie,
+                                "Unité": prod_data.get("Unité"),
+                                "Source": "Stock",
+                                "Statut": "Pris"
+                            })
+                            save_data("materiaux", st.session_state["materiaux"])
+                            st.success(f"{q_sortie} sortis du stock !")
+                            st.rerun()
+                        else:
+                            st.error("Stock vide ou introuvable.")
+                
+                else: # Commande Fournisseur
+                    desc = st.text_input("Désignation (ex: Parquet Chêne)")
+                    q_com = st.number_input("Quantité", min_value=1.0)
+                    u_com = st.text_input("Unité", "m²")
+                    
+                    if st.form_submit_button("Ajouter à commander"):
+                        st.session_state["materiaux"].append({
+                            "ID Chantier": chantier_obj.get("ID"),
+                            "Nom Chantier": sel_name,
+                            "Référence": "CMD",
+                            "Désignation": desc,
+                            "Quantité": q_com,
+                            "Unité": u_com,
+                            "Source": "Fournisseur",
+                            "Statut": "À Commander"
+                        })
+                        save_data("materiaux", st.session_state["materiaux"])
+                        st.success("Ajouté à la liste !")
+                        st.rerun()
 
-    # Modifier un devis existant
-    if st.session_state["devis"]:
-        st.header("Modifier un devis existant")
-        devis_a_modifier = st.selectbox(
-            "Sélectionnez un devis à modifier",
-            [d["Numéro de devis"] for d in st.session_state["devis"]]
+        # --- LISTE DES MATÉRIAUX ---
+        with c_list:
+            st.markdown(f"### Liste : {sel_name}")
+            df_m = pd.DataFrame(st.session_state["materiaux"])
+            
+            if not df_m.empty:
+                # Filtrer pour ce chantier
+                df_filtre = df_m[df_m["Nom Chantier"] == sel_name]
+                st.dataframe(df_filtre[["Désignation", "Quantité", "Unité", "Source", "Statut"]], use_container_width=True)
+                
+                # Bouton Email
+                items_cmd = df_filtre[df_filtre["Source"] == "Fournisseur"]
+                if not items_cmd.empty:
+                    st.divider()
+                    st.markdown("📧 **Générer texte commande**")
+                    txt = f"Bonjour,\nCommande pour le chantier {sel_name} :\n"
+                    for _, r in items_cmd.iterrows():
+                        txt += f"- {r['Quantité']} {r['Unité']} : {r['Désignation']}\n"
+                    st.text_area("Copier-coller dans votre mail :", txt, height=150)
+
+# =========================================================
+# PAGE 4 : STOCK (CORRIGÉ & ÉDITABLE)
+# =========================================================
+elif page == "📦 Stock Dépôt":
+    st.title("📦 Inventaire Dépôt")
+    
+    # 1. Ajout Rapide
+    with st.expander("➕ Ajouter un nouveau produit au catalogue", expanded=False):
+        with st.form("new_prod_stock"):
+            c1, c2, c3 = st.columns(3)
+            ref = c1.text_input("Référence (ex: PEINT-01)")
+            lib = c2.text_input("Libellé (ex: Peinture Bleue)")
+            cat = c3.selectbox("Catégorie", CATEGORIES_STOCK)
+            
+            c4, c5, c6 = st.columns(3)
+            qte = c4.number_input("Quantité Initiale", 0.0)
+            unit = c5.text_input("Unité (Pot, m², pce...)", "Unité")
+            prix = c6.number_input("Prix Achat (€)", 0.0)
+            
+            if st.form_submit_button("Ajouter au Stock"):
+                new_p = {
+                    "Référence": ref, "Libellé": lib, "Catégorie": cat,
+                    "Quantité": qte, "Unité": unit, "Prix Achat": prix, "Seuil Alerte": 5
+                }
+                st.session_state["stocks"].append(new_p)
+                save_data("stocks", st.session_state["stocks"])
+                st.success("Produit ajouté !")
+                st.rerun()
+
+    # 2. Tableau Éditable (La demande principale)
+    st.markdown("### 📝 Modifier le stock (Prix, Quantités)")
+    df_s = pd.DataFrame(st.session_state["stocks"])
+    
+    if df_s.empty:
+        st.warning("Le stock est vide. Utilisez le formulaire ci-dessus pour commencer.")
+    else:
+        # Configuration pour modification facile
+        edited_stock = st.data_editor(
+            df_s,
+            num_rows="dynamic", # Permet ajout/suppression lignes
+            use_container_width=True,
+            key="editor_stock",
+            column_config={
+                "Prix Achat": st.column_config.NumberColumn(format="%.2f €"),
+                "Quantité": st.column_config.NumberColumn(step=1),
+                "Catégorie": st.column_config.SelectboxColumn(options=CATEGORIES_STOCK)
+            }
         )
-        if devis_a_modifier:
-            devis_data = next((d for d in st.session_state["devis"] if d["Numéro de devis"] == devis_a_modifier), None)
-            if devis_data:
-                new_montant = st.number_input("Nouveau montant (€)", value=devis_data["Montant total (€)"], min_value=0.0, step=0.01)
-                new_statut = st.selectbox("Nouveau statut", ["En attente", "Accepté", "Refusé"], index=["En attente", "Accepté", "Refusé"].index(devis_data["Statut"]))
-                if st.button("Enregistrer les modifications"):
-                    devis_data["Montant total (€)"] = new_montant
-                    devis_data["Statut"] = new_statut
-                    save_data(st.session_state["devis"], DEVIS_FILE)
-                    st.success("Devis modifié avec succès !")
+        
+        if st.button("💾 SAUVEGARDER MODIFICATIONS STOCK", type="primary"):
+            st.session_state["stocks"] = edited_stock.to_dict(orient="records")
+            save_data("stocks", st.session_state["stocks"])
+            st.success("Stock mis à jour avec succès !")
 
-# --- SECTION 9: Gestion des Clients ---
-elif page == "Gestion des Clients":
-    st.title("Gestion des Clients")
+# =========================================================
+# PAGE 5 : CLIENTS (CORRIGÉ & ÉDITABLE)
+# =========================================================
+elif page == "👥 Clients":
+    st.title("👥 Base Clients")
+    
+    # 1. Ajout Rapide
+    with st.expander("➕ Ajouter un Client", expanded=False):
+        with st.form("new_cli"):
+            n = st.text_input("Nom / Entreprise")
+            e = st.text_input("Email")
+            t = st.text_input("Téléphone")
+            if st.form_submit_button("Ajouter"):
+                st.session_state["clients"].append({"Nom": n, "Email": e, "Téléphone": t, "Adresse": ""})
+                save_data("clients", st.session_state["clients"])
+                st.success("Client ajouté !")
+                st.rerun()
 
-    nom_client = st.text_input("Nom du client")
-    email = st.text_input("Email")
-    telephone = st.text_input("Téléphone")
-    adresse = st.text_area("Adresse")
-    statut = st.selectbox("Statut du client", ["Actif", "Potentiel", "Inactif"])
-
-    if st.button("Ajouter le client"):
-        client = {
-            "Nom": nom_client,
-            "Email": email,
-            "Téléphone": telephone,
-            "Adresse": adresse,
-            "Statut": statut
+    # 2. Tableau Éditable
+    st.markdown("### 📝 Liste des Clients")
+    df_cli = pd.DataFrame(st.session_state["clients"])
+    
+    edited_clients = st.data_editor(
+        df_cli,
+        num_rows="dynamic",
+        use_container_width=True,
+        key="editor_clients",
+        column_config={
+            "Email": st.column_config.LinkColumn(display_text="Envoyer mail")
         }
-        st.session_state["clients"].append(client)
-        save_data(st.session_state["clients"], CLIENTS_FILE)
-        st.success("Client ajouté avec succès !")
-
-    # Modifier un client existant
-    if st.session_state["clients"]:
-        st.header("Modifier un client existant")
-        client_a_modifier = st.selectbox(
-            "Sélectionnez un client à modifier",
-            [c["Nom"] for c in st.session_state["clients"]]
-        )
-        if client_a_modifier:
-            client_data = next((c for c in st.session_state["clients"] if c["Nom"] == client_a_modifier), None)
-            if client_data:
-                new_email = st.text_input("Nouveau email", value=client_data["Email"])
-                new_statut = st.selectbox("Nouveau statut", ["Actif", "Potentiel", "Inactif"], index=["Actif", "Potentiel", "Inactif"].index(client_data["Statut"]))
-                if st.button("Enregistrer les modifications"):
-                    client_data["Email"] = new_email
-                    client_data["Statut"] = new_statut
-                    save_data(st.session_state["clients"], CLIENTS_FILE)
-                    st.success("Client modifié avec succès !")
-
+    )
+    
+    if st.button("💾 SAUVEGARDER CLIENTS", type="primary"):
+        st.session_state["clients"] = edited_clients.to_dict(orient="records")
+        save_data("clients", st.session_state["clients"])
+        st.success("Base clients sauvegardée !")
